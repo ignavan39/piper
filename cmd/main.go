@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/streadway/amqp"
 )
@@ -35,10 +36,10 @@ type Report struct {
 }
 
 type ReadQueueReport struct {
-	ReportChannel      *amqp.Channel
-	Report             chan Report
-	ReportExchangeName string
-	ReportRoutingKey   string
+	channel      *amqp.Channel
+	Report       chan Report
+	exchangeName string
+	routingKey   string
 }
 
 type ReadQueue struct {
@@ -48,7 +49,7 @@ type ReadQueue struct {
 	done            chan error
 	routines        int
 	messagesChannel chan Message
-	report          *ReadQueueReport
+	Report          *ReadQueueReport
 }
 
 func NewReadQueue(
@@ -87,26 +88,32 @@ func (rq *ReadQueue) WithReport(reportExchangeName string, reportRoutingKey stri
 		return nil, fmt.Errorf("[Rq][%s][createReportChannel]: %s", rq.queue, err)
 	}
 
+	err = reportChannel.ExchangeDeclare(reportExchangeName, "topic", false, false, false, false, nil)
+	if err != nil {
+		return nil, fmt.Errorf("[Rq][%s][createReportChannel]: %s", rq.queue, err)
+	}
 	report := make(chan Report)
-	rq.report = &ReadQueueReport{
-		ReportExchangeName: reportExchangeName,
-		ReportChannel:      reportChannel,
-		Report:             report,
-		ReportRoutingKey:   reportRoutingKey,
+	rq.Report = &ReadQueueReport{
+		exchangeName: reportExchangeName,
+		channel:      reportChannel,
+		Report:       report,
+		routingKey:   reportRoutingKey,
 	}
 	return rq, nil
 }
 
 func (rq *ReadQueue) Run() error {
 	defer close(rq.messagesChannel)
-
+	var wg sync.WaitGroup
 	deliveries, err := rq.channel.Consume(rq.queue, "", false, false, false, false, nil)
 
 	if err != nil {
 		return fmt.Errorf("[Rq][%s][Run]: %s", rq.queue, err)
 	}
 
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		for {
 			select {
 			case delivery, ok := <-deliveries:
@@ -122,19 +129,30 @@ func (rq *ReadQueue) Run() error {
 					fmt.Printf("[Rq][%s][Run][failed ack]: %s", rq.queue, err)
 					continue
 				}
-				fmt.Println(message)
 				rq.messagesChannel <- *message
 			}
 		}
 	}()
 
-	if rq.report != nil {
+	if rq.Report != nil {
+		wg.Add(1)
 		go func() {
-			for report := range rq.report.Report {
-				rq.report.ReportChannel.Publish(rq.report.ReportExchangeName,rq.report.ReportRoutingKey,false,false)
+			defer wg.Done()
+			for report := range rq.Report.Report {
+				buffer, err := json.Marshal(report)
+				if err != nil {
+					fmt.Printf("[Rq][%s][Run][report] - failed marshal: %s", rq.queue, err)
+					continue
+				}
+
+				rq.Report.channel.Publish(rq.Report.exchangeName, rq.Report.routingKey, false, false, amqp.Publishing{
+					ContentType: "application/json",
+					Body:        buffer,
+				})
 			}
 		}()
 	}
+	wg.Wait()
 	return nil
 }
 
@@ -150,13 +168,20 @@ func main() {
 	// var wg sync.WaitGroup
 	// wg.Add(1)
 	// go func() {
+
+	c.WithReport("kek.report", "kek.report")
 	go c.Run()
 	if err != nil {
 		panic(err)
 	}
-
 	for kek := range c.messagesChannel {
 		fmt.Println(kek)
+		c.Report.Report <- Report{
+			Done: &DoneReport{
+				Status: 1,
+			},
+			UID: kek.UID,
+		}
 	}
 	// defer wg.Done()
 	// }()
