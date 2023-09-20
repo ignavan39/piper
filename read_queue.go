@@ -1,4 +1,4 @@
-package rabbitmq
+package piper
 
 import (
 	"bytes"
@@ -146,6 +146,7 @@ func (rq *ReadQueue) Run() error {
 	if rq.Report != nil {
 		wg.Add(1)
 		go func() {
+			defer close(rq.Report.Report)
 			defer wg.Done()
 			for report := range rq.Report.Report {
 				buffer, err := json.Marshal(report)

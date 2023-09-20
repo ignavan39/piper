@@ -1,4 +1,4 @@
-package rabbitmq
+package piper
 
 type Message struct {
 	UID     string `json:"uid"`
