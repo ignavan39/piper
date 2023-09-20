@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"piper/app/rabbitmq"
+	"piper/pkg/rabbitmq"
 
 	"github.com/streadway/amqp"
 )
@@ -12,23 +12,23 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	c, err := rabbitmq.NewReadQueue(connect, "amq.topic", "kek", 2, "kek")
+	c, err := rabbitmq.NewReadQueue(connect, "amq.topic", "test", 2, "test")
 	if err != nil {
 		panic(err)
 	}
 
-	c.WithReport("kek.report", "kek.report")
+	c.WithReport("test.report", "test.report")
 	go c.Run()
 	if err != nil {
 		panic(err)
 	}
-	for kek := range c.MessagesChannel {
-		fmt.Println(kek)
+	for message := range c.MessagesChannel {
+		fmt.Println(message)
 		c.Report.Report <- rabbitmq.Report{
 			Done: &rabbitmq.DoneReport{
 				Status: 1,
 			},
-			UID: kek.UID,
+			UID: message.UID,
 		}
 	}
 }

@@ -2,7 +2,7 @@ package rabbitmq
 
 type Message struct {
 	UID     string `json:"uid"`
-	Payload string `json:"payload"`
+	Payload any    `json:"payload"`
 }
 
 type DoneReport struct {
