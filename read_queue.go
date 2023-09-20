@@ -49,6 +49,18 @@ func NewReadQueue(
 		return nil, fmt.Errorf("[Rq][createChannel][%s]: %s", queue, err)
 	}
 
+	if err := channel.ExchangeDeclare(
+		exchange,
+		"topic",
+		false,
+		false,
+		false,
+		false,
+		nil,
+	); err != nil {
+		return nil, fmt.Errorf("[Rq][declareExchange][%s]: %s", queue, err)
+	}
+
 	if err := channel.QueueBind(queue, routingKey, exchange, false, nil); err != nil {
 		return nil, fmt.Errorf("[Rq][queueBind][%s]: %s", queue, err)
 	}

@@ -12,10 +12,25 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	c, err := piper.NewReadQueue(connect, "amq.topic", "test", 2, "test")
+	c, err := piper.NewReadQueue(connect, "test.exchange", "test", 2, "test")
 	if err != nil {
 		panic(err)
 	}
+
+	wq, err := piper.NewWriteQueue(connect, "test.exchange", "test")
+	if err != nil {
+		panic(err)
+	}
+	go wq.Run()
+
+	go func() {
+		for i := 0; i <= 20; i++ {
+			wq.WriteChannel <- piper.Message{
+				Payload: i,
+				UID:     "uid",
+			}
+		}
+	}()
 
 	c.WithReport("test.report", "test.report")
 	go c.Run()
