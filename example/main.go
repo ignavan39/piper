@@ -25,7 +25,7 @@ func main() {
 
 	go func() {
 		for i := 0; i <= 20; i++ {
-			wq.WriteChannel <- piper.Message{
+			wq.Write() <- piper.Message{
 				Payload: i,
 				UID:     "uid",
 			}
@@ -37,9 +37,9 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	for message := range c.MessagesChannel {
+	for message := range c.Read() {
 		fmt.Println(message)
-		c.Report.Report <- piper.Report{
+		c.Report() <- piper.Report{
 			Done: &piper.DoneReport{
 				Status: 1,
 			},

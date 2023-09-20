@@ -11,19 +11,19 @@ import (
 
 type ReadQueueReport struct {
 	channel      *amqp.Channel
-	Report       chan Report
+	report       chan Report
 	exchangeName string
 	routingKey   string
 }
 
 type ReadQueue struct {
-	conn            *amqp.Connection
-	channel         *amqp.Channel
-	queue           string
-	done            chan error
-	routines        int
-	MessagesChannel chan Message
-	Report          *ReadQueueReport
+	conn     *amqp.Connection
+	channel  *amqp.Channel
+	queue    string
+	done     chan error
+	routines int
+	read     chan Message
+	report   *ReadQueueReport
 }
 
 func NewReadQueue(
@@ -68,12 +68,12 @@ func NewReadQueue(
 	channel.Qos(routines, 0, false)
 
 	return &ReadQueue{
-		channel:         channel,
-		conn:            conn,
-		queue:           queue,
-		done:            make(chan error),
-		routines:        routines,
-		MessagesChannel: make(chan Message),
+		channel:  channel,
+		conn:     conn,
+		queue:    queue,
+		done:     make(chan error),
+		routines: routines,
+		read:     make(chan Message),
 	}, nil
 }
 
@@ -96,17 +96,25 @@ func (rq *ReadQueue) WithReport(reportExchangeName string, reportRoutingKey stri
 		return nil, fmt.Errorf("[Rq][%s][createReportChannel]: %s", rq.queue, err)
 	}
 	report := make(chan Report)
-	rq.Report = &ReadQueueReport{
+	rq.report = &ReadQueueReport{
 		exchangeName: reportExchangeName,
 		channel:      reportChannel,
-		Report:       report,
+		report:       report,
 		routingKey:   reportRoutingKey,
 	}
 	return rq, nil
 }
 
+func (rq *ReadQueue) Report() chan Report {
+	return rq.report.report
+}
+
+func (rq *ReadQueue) Read() <-chan Message {
+	return rq.read
+}
+
 func (rq *ReadQueue) Run() error {
-	defer close(rq.MessagesChannel)
+	defer close(rq.read)
 	var wg sync.WaitGroup
 	deliveries, err := rq.channel.Consume(
 		rq.queue,
@@ -148,28 +156,28 @@ func (rq *ReadQueue) Run() error {
 							continue
 						}
 						fmt.Println(idx)
-						rq.MessagesChannel <- *message
+						rq.read <- *message
 					}
 				}
 			}(i)
 		}
 	}()
 
-	if rq.Report != nil {
+	if rq.report != nil {
 		wg.Add(1)
 		go func() {
-			defer close(rq.Report.Report)
+			defer close(rq.report.report)
 			defer wg.Done()
-			for report := range rq.Report.Report {
+			for report := range rq.report.report {
 				buffer, err := json.Marshal(report)
 				if err != nil {
 					fmt.Printf("[Rq][%s][Run][report] - failed marshal: %s", rq.queue, err)
 					continue
 				}
 
-				rq.Report.channel.Publish(
-					rq.Report.exchangeName,
-					rq.Report.routingKey,
+				rq.report.channel.Publish(
+					rq.report.exchangeName,
+					rq.report.routingKey,
 					false,
 					false,
 					amqp.Publishing{

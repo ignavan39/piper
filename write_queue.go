@@ -9,12 +9,12 @@ import (
 )
 
 type WriteQueue struct {
-	WriteChannel chan Message
-	conn         *amqp.Connection
-	channel      *amqp.Channel
-	exchange     string
-	routingKey   string
-	done         chan error
+	write      chan Message
+	conn       *amqp.Connection
+	channel    *amqp.Channel
+	exchange   string
+	routingKey string
+	done       chan error
 }
 
 func NewWriteQueue(
@@ -41,17 +41,21 @@ func NewWriteQueue(
 	}
 
 	wq := &WriteQueue{
-		WriteChannel: make(chan Message),
-		conn:         conn,
-		channel:      channel,
-		exchange:     exchange,
-		routingKey:   routingKey,
+		write:      make(chan Message),
+		conn:       conn,
+		channel:    channel,
+		exchange:   exchange,
+		routingKey: routingKey,
 	}
 	return wq, nil
 }
 
+func (wq *WriteQueue) Write() chan Message {
+	return wq.write
+}
+
 func (wq *WriteQueue) Run() {
-	defer close(wq.WriteChannel)
+	defer close(wq.write)
 	var wg sync.WaitGroup
 
 	wg.Add(1)
@@ -60,7 +64,7 @@ func (wq *WriteQueue) Run() {
 		defer wg.Done()
 		for {
 			select {
-			case payload, ok := <-wq.WriteChannel:
+			case payload, ok := <-wq.write:
 				fmt.Println(payload)
 				if !ok {
 					fmt.Printf("[Wq][%s-%s][Run][channel closed]\n", wq.exchange, wq.routingKey)
