@@ -1,18 +1,17 @@
 package main
 
 import (
-	"fmt"
 	"piper"
 
 	"github.com/streadway/amqp"
 )
 
 func main() {
-	connect, err := amqp.Dial("amqp://user:pass@localhost:5672")
+	connect, err := amqp.Dial("amqp://root:pass@localhost:5672")
 	if err != nil {
 		panic(err)
 	}
-	c, err := piper.NewReadQueue(connect, "test.exchange", "test", 2, "test")
+	c, err := piper.NewReadQueue(connect, "test.exchange", "test", 40, "test")
 	if err != nil {
 		panic(err)
 	}
@@ -32,14 +31,18 @@ func main() {
 		}
 	}()
 
-	c.WithReport("test.report", "test.report")
-	go c.Run()
+	rq, err := c.WithReport("test.report", "test.report")
 	if err != nil {
 		panic(err)
 	}
-	for message := range c.Read() {
-		fmt.Println(message)
-		c.Report() <- piper.Report{
+	go func() {
+		err := rq.Run()
+		if err != nil {
+			panic(err)
+		}
+	}()
+	for message := range rq.Read() {
+		rq.Report() <- piper.Report{
 			Done: &piper.DoneReport{
 				Status: 1,
 			},
