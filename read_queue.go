@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/streadway/amqp"
+	"piper/wpqueue"
 	"sync"
 )
 
@@ -129,7 +130,7 @@ func (rq *ReadQueue) Run() error {
 		return fmt.Errorf("[Rq][%s][Run]: %s", rq.queue, err)
 	}
 	wg.Add(1)
-	pool := NewWorkerPool(rq.routines, deliveries)
+	pool := wpqueue.NewWorkerPool(rq.routines, rq.queue, deliveries)
 	go pool.RunWorkerPool()
 
 	go func() {
@@ -138,10 +139,7 @@ func (rq *ReadQueue) Run() error {
 			select {
 			case result, ok := <-pool.Results():
 				if !ok {
-					continue
-				}
-				if !result.Success {
-					fmt.Printf("[Rq][%s][%d][Run][channel closed]\n", rq.queue, result.WorkerId)
+					fmt.Printf("[Rq][%s][Run][queue result channel closed]\n", rq.queue)
 					return
 				}
 				var message *Message
