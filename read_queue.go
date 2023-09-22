@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"sync"
-
 	"github.com/streadway/amqp"
+	"piper/wpqueue"
+	"sync"
 )
 
 type ReadQueueReport struct {
@@ -129,37 +129,35 @@ func (rq *ReadQueue) Run() error {
 	if err != nil {
 		return fmt.Errorf("[Rq][%s][Run]: %s", rq.queue, err)
 	}
+	wg.Add(1)
+	pool := wpqueue.NewWorkerPool(rq.routines, rq.queue, deliveries)
+	go pool.RunWorkerPool()
 
-	wg.Add(rq.routines)
 	go func() {
-		for i := 0; i < rq.routines; i++ {
-			go func(idx int) {
-				defer wg.Done()
-				for {
-					select {
-					case delivery, ok := <-deliveries:
-						if !ok {
-							fmt.Printf("[Rq][%s][%d][Run][channel closed]\n", rq.queue, idx)
-							return
-						}
-						var message *Message
-						if err := json.NewDecoder(bytes.NewReader(delivery.Body)).Decode(&message); err != nil {
-							fmt.Printf("[Rq][%s][%d][Run][failed decode]: %s\n", rq.queue, idx, err)
-							if err := delivery.Ack(false); err != nil {
-								fmt.Printf("[Rq][%s][%d][Run][failed ack]: %s", rq.queue, idx, err)
-								continue
-							}
-							continue
-						}
-						if err := delivery.Ack(false); err != nil {
-							fmt.Printf("[Rq][%s][%d][Run][failed ack]: %s", rq.queue, idx, err)
-							continue
-						}
-						fmt.Println(idx)
-						rq.read <- *message
-					}
+		defer wg.Done()
+		for {
+			select {
+			case result, ok := <-pool.Results():
+				if !ok {
+					fmt.Printf("[Rq][%s][Run][queue result channel closed]\n", rq.queue)
+					return
 				}
-			}(i)
+				var message *Message
+				if err := json.NewDecoder(bytes.NewReader(result.Delivery.Body)).Decode(&message); err != nil {
+					fmt.Printf("[Rq][%s][%d][Run][failed decode]: %s\n", rq.queue, result.WorkerId, err)
+					if err := result.Delivery.Ack(false); err != nil {
+						fmt.Printf("[Rq][%s][%d][Run][failed ack]: %s", rq.queue, result.WorkerId, err)
+						continue
+					}
+					continue
+				}
+				if err := result.Delivery.Ack(false); err != nil {
+					fmt.Printf("[Rq][%s][%d][Run][failed ack]: %s", rq.queue, result.WorkerId, err)
+					continue
+				}
+				fmt.Println(*message)
+				rq.read <- *message
+			}
 		}
 	}()
 
