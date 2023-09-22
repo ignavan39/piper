@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/streadway/amqp"
-	"piper/wpqueue"
 	"sync"
 )
 
@@ -130,7 +129,7 @@ func (rq *ReadQueue) Run() error {
 		return fmt.Errorf("[Rq][%s][Run]: %s", rq.queue, err)
 	}
 	wg.Add(1)
-	pool := wpqueue.NewWorkerPool(rq.routines, rq.queue, deliveries)
+	pool := NewWorkerPool(rq.routines, rq.queue, deliveries)
 	go pool.RunWorkerPool()
 
 	go func() {

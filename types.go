@@ -1,5 +1,7 @@
 package piper
 
+import "github.com/streadway/amqp"
+
 type Message struct {
 	UID     string `json:"uid"`
 	Payload any    `json:"payload"`
@@ -24,4 +26,16 @@ type Report struct {
 	Done   *DoneReport   `json:"done,omitempty"`
 	Reject *RejectReport `json:"reject,omitempty"`
 	Fail   *FailReport   `json:"fail,omitempty"`
+}
+
+type QueueWorkerPool struct {
+	workersCount int
+	queue        string
+	deliveries   <-chan amqp.Delivery
+	results      chan ResultDelivery
+}
+
+type ResultDelivery struct {
+	WorkerId int
+	Delivery amqp.Delivery
 }

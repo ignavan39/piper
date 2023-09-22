@@ -1,4 +1,4 @@
-package wpqueue
+package piper
 
 import (
 	"fmt"
