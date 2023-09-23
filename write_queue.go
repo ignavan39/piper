@@ -10,7 +10,7 @@ import (
 
 type WriteQueue struct {
 	write      chan Message
-	conn       *amqp.Connection
+	conn       *Connection
 	channel    *amqp.Channel
 	exchange   string
 	routingKey string
@@ -18,11 +18,11 @@ type WriteQueue struct {
 }
 
 func NewWriteQueue(
-	conn *amqp.Connection,
+	conn *Connection,
 	exchange string,
 	routingKey string,
 ) (*WriteQueue, error) {
-	channel, err := conn.Channel()
+	channel, err := conn.amqpConn.Channel()
 	if err != nil {
 		return nil, fmt.Errorf("[Wq][createChannel][%s]: %s", exchange, err)
 	}

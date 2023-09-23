@@ -2,21 +2,26 @@ package main
 
 import (
 	"piper"
-
-	"github.com/streadway/amqp"
+	"time"
 )
 
 func main() {
-	connect, err := amqp.Dial("amqp://root:pass@localhost:5672")
+	conn, err := piper.NewConnection(piper.ConnectionOptions{
+		Host:     "localhost",
+		Password: "pass",
+		UserName: "root",
+		Port:     5672,
+	}, time.Second*5, time.Second*5)
+
 	if err != nil {
 		panic(err)
 	}
-	c, err := piper.NewReadQueue(connect, "test.exchange", "test", 40, "test")
+	c, err := piper.NewReadQueue(conn, "test.exchange", "test", 40, "test")
 	if err != nil {
 		panic(err)
 	}
 
-	wq, err := piper.NewWriteQueue(connect, "test.exchange", "test")
+	wq, err := piper.NewWriteQueue(conn, "test.exchange", "test")
 	if err != nil {
 		panic(err)
 	}
