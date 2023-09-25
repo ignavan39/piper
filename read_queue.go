@@ -16,7 +16,7 @@ type ReadQueueReport struct {
 }
 
 type ReadQueue struct {
-	conn     *Connection
+	conn     *amqp.Connection
 	channel  *amqp.Channel
 	queue    string
 	done     chan error
@@ -26,13 +26,13 @@ type ReadQueue struct {
 }
 
 func NewReadQueue(
-	conn *Connection,
+	conn *amqp.Connection,
 	exchange string,
 	routingKey string,
 	routines int,
 	queue string,
 ) (*ReadQueue, error) {
-	channel, err := conn.amqpConn.Channel()
+	channel, err := conn.Channel()
 	if err != nil {
 		return nil, fmt.Errorf("[Rq][createChannel][%s]: %s", queue, err)
 	}
@@ -65,7 +65,7 @@ func NewReadQueue(
 }
 
 func (rq *ReadQueue) WithReport(reportExchangeName string, reportRoutingKey string) (*ReadQueue, error) {
-	reportChannel, err := rq.conn.amqpConn.Channel()
+	reportChannel, err := rq.conn.Channel()
 	if err != nil {
 		return nil, fmt.Errorf("[Rq][%s][createReportChannel]: %s", rq.queue, err)
 	}
