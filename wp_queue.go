@@ -6,8 +6,8 @@ import (
 	"sync"
 )
 
-func NewWorkerPool(count int, queue string, deliveries <-chan amqp.Delivery) QueueWorkerPool {
-	return QueueWorkerPool{
+func NewWorkerPool(count int, queue string, deliveries <-chan amqp.Delivery) *QueueWorkerPool {
+	return &QueueWorkerPool{
 		workersCount: count,
 		queue:        queue,
 		deliveries:   deliveries,
