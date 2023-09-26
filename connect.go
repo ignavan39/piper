@@ -5,8 +5,20 @@ import (
 	"fmt"
 	"github.com/pkg/errors"
 	"github.com/streadway/amqp"
+	"sync"
 	"time"
 )
+
+type Connection struct {
+	dsn            string
+	backoffPolicy  []time.Duration
+	conn           *amqp.Connection
+	serviceChannel *amqp.Channel
+	mu             sync.RWMutex
+	channelPool    map[ChannelPoolItemKey]*amqp.Channel
+	channelPoolMu  sync.RWMutex
+	isClosed       bool
+}
 
 func NewConnection(dsn string, backoffPolicy []time.Duration) (*Connection, error) {
 	conn := &Connection{
@@ -16,7 +28,7 @@ func NewConnection(dsn string, backoffPolicy []time.Duration) (*Connection, erro
 	return conn, nil
 }
 
-func (c *Connection) OriginalConn() *amqp.Connection {
+func (c *Connection) NativeConn() *amqp.Connection {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -26,7 +38,9 @@ func (c *Connection) OriginalConn() *amqp.Connection {
 func (c *Connection) Channel() (*amqp.Channel, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-
+	if c.conn == nil {
+		return nil, errors.New("connection is not defined")
+	}
 	channel, err := c.conn.Channel()
 	if err != nil {
 		return nil, errors.Wrap(err, "open a channel")
@@ -184,6 +198,9 @@ func (c *Connection) GetChannelFromPool(exchange, key, queue, consumer string) (
 	}
 	ch, ok := c.channelPool[poolKey]
 	if !ok {
+		if c.conn == nil {
+			return nil, errors.New("connection is not defined")
+		}
 		ch, err = c.conn.Channel()
 		if err != nil {
 			return nil, errors.Wrap(err, "create channel")

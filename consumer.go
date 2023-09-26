@@ -3,13 +3,24 @@ package piper
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/streadway/amqp"
 	"sync"
 	"time"
 )
 
+type Consumer struct {
+	conn   *Connection
+	config ConsumerConfig
+	name   string
+	read   chan Message
+}
+
 func NewConsumer(config ConsumerConfig, ch *Connection) (*Consumer, error) {
+	if ch == nil {
+		return nil, errors.New("connection is not defined")
+	}
 	c := &Consumer{
 		config: config,
 		read:   make(chan Message),

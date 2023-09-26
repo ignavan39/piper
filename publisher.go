@@ -2,13 +2,27 @@ package piper
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/streadway/amqp"
 	"sync"
 	"time"
 )
 
+type Publisher struct {
+	conn           *Connection
+	config         PublisherConfig
+	isConnected    bool
+	name           string
+	muConn         sync.Mutex
+	messages       chan Message
+	reportMessages chan Report
+}
+
 func NewPublisher(config PublisherConfig, ch *Connection) (*Publisher, error) {
+	if ch == nil {
+		return nil, errors.New("connection is not defined")
+	}
 	publisher := &Publisher{
 		config:         config,
 		messages:       make(chan Message),

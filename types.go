@@ -2,8 +2,6 @@ package piper
 
 import (
 	"github.com/streadway/amqp"
-	"sync"
-	"time"
 )
 
 type Message struct {
@@ -51,24 +49,6 @@ type ChannelPoolItemKey struct {
 	Key      string
 }
 
-type Connection struct {
-	dsn            string
-	backoffPolicy  []time.Duration
-	conn           *amqp.Connection
-	serviceChannel *amqp.Channel
-	mu             sync.RWMutex
-	channelPool    map[ChannelPoolItemKey]*amqp.Channel
-	channelPoolMu  sync.RWMutex
-	isClosed       bool
-}
-
-type Consumer struct {
-	conn   *Connection
-	config ConsumerConfig
-	name   string
-	read   chan Message
-}
-
 type ConsumerConfig struct {
 	Exchange     string
 	ExchangeKind string
@@ -76,15 +56,7 @@ type ConsumerConfig struct {
 	Routines     int
 	Queue        string
 }
-type Publisher struct {
-	conn           *Connection
-	config         PublisherConfig
-	isConnected    bool
-	name           string
-	muConn         sync.Mutex
-	messages       chan Message
-	reportMessages chan Report
-}
+
 type PublisherConfig struct {
 	Exchange     string
 	ExchangeKind string
