@@ -24,7 +24,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	publish, err := piper.NewPublisher(&piper.PublisherConfig{
+	publish, err := piper.NewPublisher(piper.PublisherConfig{
 		Exchange:     "test.exchange",
 		ExchangeKind: "topic",
 		RoutingKey:   "test",
@@ -35,7 +35,7 @@ func main() {
 	}
 	go publish.Run()
 
-	reportPublisher, err := piper.NewPublisher(&piper.PublisherConfig{
+	reportPublisher, err := piper.NewPublisher(piper.PublisherConfig{
 		Exchange:     "test.report",
 		ExchangeKind: "topic",
 		RoutingKey:   "test.report",
@@ -46,7 +46,7 @@ func main() {
 	}
 	go reportPublisher.Run()
 
-	consumer, err := piper.NewConsumer(&piper.ConsumerConfig{
+	consumer, err := piper.NewConsumer(piper.ConsumerConfig{
 		Exchange:     "test.exchange",
 		ExchangeKind: "topic",
 		RoutingKey:   "test",

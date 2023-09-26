@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func NewPublisher(config *PublisherConfig, ch *Connection) (*Publisher, error) {
+func NewPublisher(config PublisherConfig, ch *Connection) (*Publisher, error) {
 	publisher := &Publisher{
 		config:         config,
 		messages:       make(chan Message),

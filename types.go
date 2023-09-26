@@ -64,7 +64,7 @@ type Connection struct {
 
 type Consumer struct {
 	conn   *Connection
-	config *ConsumerConfig
+	config ConsumerConfig
 	name   string
 	read   chan Message
 }
@@ -78,7 +78,7 @@ type ConsumerConfig struct {
 }
 type Publisher struct {
 	conn           *Connection
-	config         *PublisherConfig
+	config         PublisherConfig
 	isConnected    bool
 	name           string
 	muConn         sync.Mutex

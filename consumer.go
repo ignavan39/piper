@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func NewConsumer(config *ConsumerConfig, ch *Connection) (*Consumer, error) {
+func NewConsumer(config ConsumerConfig, ch *Connection) (*Consumer, error) {
 	c := &Consumer{
 		config: config,
 		read:   make(chan Message),
