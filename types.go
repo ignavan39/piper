@@ -1,6 +1,8 @@
 package piper
 
-import "github.com/streadway/amqp"
+import (
+	"github.com/streadway/amqp"
+)
 
 type Message struct {
 	UID     string `json:"uid"`
@@ -38,4 +40,25 @@ type QueueWorkerPool struct {
 type ResultDelivery struct {
 	WorkerId int
 	Delivery amqp.Delivery
+}
+
+type ChannelPoolItemKey struct {
+	Queue    string
+	Consumer string
+	Exchange string
+	Key      string
+}
+
+type ConsumerConfig struct {
+	Exchange     string
+	ExchangeKind string
+	RoutingKey   string
+	Routines     int
+	Queue        string
+}
+
+type PublisherConfig struct {
+	Exchange     string
+	ExchangeKind string
+	RoutingKey   string
 }
