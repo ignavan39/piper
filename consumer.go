@@ -2,6 +2,7 @@ package piper
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,9 +31,9 @@ func NewConsumer(config ConsumerConfig, ch *Connection) (*Consumer, error) {
 	return c, nil
 }
 
-func (c *Consumer) Run() {
+func (c *Consumer) Run(ctx context.Context) {
 	go func() {
-		err := c.consume()
+		err := c.consume(ctx)
 		if err != nil {
 			fmt.Println(fmt.Errorf("[Rq][%s][Consume]: %s", c.config.Queue, err))
 		}
@@ -79,8 +80,10 @@ func (c *Consumer) Connect() (<-chan amqp.Delivery, error) {
 		return nil, fmt.Errorf("[Rq][qos][%s]: %s", c.config.Queue, err)
 	}
 	deliveries, err := c.conn.Consume(
-		c.config.Queue,
 		c.name,
+		c.config.Queue,
+		c.config.Exchange,
+		c.config.RoutingKey,
 		false,
 		false,
 		false,
@@ -93,7 +96,7 @@ func (c *Consumer) Connect() (<-chan amqp.Delivery, error) {
 
 	return deliveries, nil
 }
-func (c *Consumer) consume() error {
+func (c *Consumer) consume(ctx context.Context) error {
 	var deliveries <-chan amqp.Delivery
 	var wg sync.WaitGroup
 	var err error
@@ -109,18 +112,29 @@ func (c *Consumer) consume() error {
 
 	wg.Add(1)
 	pool := NewWorkerPool(c.config.Routines, c.config.Queue, deliveries)
-	go pool.RunWorkerPool()
+	go pool.RunWorkerPool(ctx)
+
 	go func() {
 		defer wg.Done()
 		for {
 			select {
+			case <-ctx.Done():
+				fmt.Printf("[Rq][%s][Run][context closed]\n", c.config.Queue)
+				if c.read != nil {
+					close(c.read)
+				}
+				return
 			case result, ok := <-pool.Results():
 				if !ok {
 					if c.conn.IsClosed() {
+						fmt.Printf("[Rq][%s][Run][connection closed]\n", c.config.Queue)
+						if c.read != nil {
+							close(c.read)
+						}
 						return
 					}
 					fmt.Printf("[Rq][%s][Run][try to reconnect consumer]\n", c.config.Queue)
-					go c.consume()
+					go c.consume(ctx)
 					return
 				}
 				var message *Message
@@ -136,7 +150,6 @@ func (c *Consumer) consume() error {
 					fmt.Printf("[Rq][%s][%d][Run][failed ack]: %s", c.config.Queue, result.WorkerId, err)
 					continue
 				}
-				fmt.Println(*message)
 				c.read <- *message
 			}
 		}

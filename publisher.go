@@ -1,6 +1,7 @@
 package piper
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,8 +14,10 @@ type Publisher struct {
 	conn           *Connection
 	config         PublisherConfig
 	isConnected    bool
+	isClose        bool
 	name           string
-	muConn         sync.Mutex
+	muConn         sync.RWMutex
+	muClose        sync.RWMutex
 	messages       chan Message
 	reportMessages chan Report
 }
@@ -54,8 +57,14 @@ func (p *Publisher) Connect() error {
 	fmt.Println("publish is connected")
 	return nil
 }
-
+func (p *Publisher) IsClose() bool {
+	p.muClose.RLock()
+	defer p.muClose.RUnlock()
+	return p.isClose
+}
 func (p *Publisher) Publish() chan Message {
+	p.muConn.RLock()
+	defer p.muConn.RUnlock()
 	if !p.isConnected {
 		for {
 			if err := p.Connect(); err != nil {
@@ -69,15 +78,22 @@ func (p *Publisher) Publish() chan Message {
 	return p.messages
 }
 
-func (p *Publisher) Run() {
+func (p *Publisher) Run(ctx context.Context) {
 	var wg sync.WaitGroup
-
 	wg.Add(1)
 
 	go func() {
 		defer wg.Done()
 		for {
 			select {
+			case <-ctx.Done():
+				fmt.Printf("[Pq][%s-%s][Run][context closed]\n", p.config.Exchange, p.config.RoutingKey)
+				close(p.reportMessages)
+				close(p.messages)
+				p.muClose.Lock()
+				p.isClose = true
+				p.muClose.Unlock()
+				return
 			case payload, ok := <-p.messages:
 				if !ok {
 					fmt.Printf("[Pq][%s-%s][Run][channel closed]\n", p.config.Exchange, p.config.RoutingKey)
@@ -92,6 +108,7 @@ func (p *Publisher) Run() {
 					continue
 				}
 				err = p.conn.Publish(
+					p.name,
 					p.config.Exchange,
 					p.config.RoutingKey,
 					false,

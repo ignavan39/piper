@@ -54,9 +54,9 @@ func (c *Connection) Close(_ context.Context) error {
 	defer c.mu.Unlock()
 
 	c.isClosed = true
-
 	for _, ch := range c.channelPool {
-		if err := ch.Close(); err != nil {
+		err := ch.Close()
+		if err != nil {
 			return errors.Wrap(err, "close rabbitMQ channel")
 		}
 	}
@@ -69,6 +69,8 @@ func (c *Connection) Close(_ context.Context) error {
 }
 
 func (c *Connection) IsClosed() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return c.isClosed
 }
 
@@ -87,19 +89,22 @@ func (c *Connection) connect() error {
 	return nil
 }
 
-func (c *Connection) Connect() error {
+func (c *Connection) Connect(ctx context.Context) error {
 	if !c.isClosed {
 		if err := c.connect(); err != nil {
 			return errors.Wrap(err, "connect")
 		}
 	}
-
+	fmt.Println("starting connection watcher")
 	go func() {
-		fmt.Println("starting connection notify")
 		for {
 			select {
-			default:
-				_, ok := <-c.conn.NotifyClose(make(chan *amqp.Error))
+			case <-ctx.Done():
+				_ = c.Close(ctx)
+				fmt.Println("connection closed")
+				return
+			case res, ok := <-c.conn.NotifyClose(make(chan *amqp.Error)):
+				fmt.Println(res, ok)
 				if !ok {
 					if c.isClosed {
 						return
@@ -156,8 +161,10 @@ func (c *Connection) Qos(routines, prefetch int, global bool) error {
 }
 
 func (c *Connection) Consume(
-	queue,
-	consumer string,
+	name string,
+	queue string,
+	exchange string,
+	routingKey string,
 	autoAck,
 	exclusive,
 	noLocal,
@@ -166,35 +173,35 @@ func (c *Connection) Consume(
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	ch, err := c.GetChannelFromPool("", "", queue, consumer)
+	ch, err := c.GetChannelFromPool(name, exchange, routingKey, queue)
 	if err != nil {
 		return nil, errors.Wrap(err, "get channel from pool")
 	}
 
-	return ch.Consume(queue, consumer, autoAck, exclusive, noLocal, noWait, args)
+	return ch.Consume(queue, name, autoAck, exclusive, noLocal, noWait, args)
 }
 
-func (c *Connection) Publish(exchange, key string, mandatory, immediate bool, msg amqp.Publishing) error {
+func (c *Connection) Publish(name, exchange, routingKey string, mandatory, immediate bool, msg amqp.Publishing) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	ch, err := c.GetChannelFromPool(exchange, key, "", "")
+	ch, err := c.GetChannelFromPool(name, exchange, routingKey, "")
 	if err != nil {
 		return errors.Wrap(err, "get channel from pool")
 	}
 
-	return ch.Publish(exchange, key, mandatory, immediate, msg)
+	return ch.Publish(exchange, routingKey, mandatory, immediate, msg)
 }
 
-func (c *Connection) GetChannelFromPool(exchange, key, queue, consumer string) (*amqp.Channel, error) {
+func (c *Connection) GetChannelFromPool(name, exchange, routingKey, queue string) (*amqp.Channel, error) {
 	c.channelPoolMu.Lock()
 	defer c.channelPoolMu.Unlock()
 	var err error
 	poolKey := ChannelPoolItemKey{
-		Exchange: exchange,
-		Key:      key,
-		Queue:    queue,
-		Consumer: consumer,
+		Name:       name,
+		Exchange:   exchange,
+		RoutingKey: routingKey,
+		Queue:      queue,
 	}
 	ch, ok := c.channelPool[poolKey]
 	if !ok {
@@ -215,8 +222,7 @@ func (c *Connection) channelNotifyHandler(poolKey ChannelPoolItemKey) {
 	ch := c.channelPool[poolKey]
 
 	go func() {
-		fmt.Println("starting channel watcher")
-
+		fmt.Printf("starting channel watcher on channel: %s \n", poolKey.Name)
 		for {
 			select {
 			default:

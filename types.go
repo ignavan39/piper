@@ -43,10 +43,11 @@ type ResultDelivery struct {
 }
 
 type ChannelPoolItemKey struct {
-	Queue    string
-	Consumer string
-	Exchange string
-	Key      string
+	Name       string
+	Queue      string
+	Consumer   string
+	Exchange   string
+	RoutingKey string
 }
 
 type ConsumerConfig struct {

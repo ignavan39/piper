@@ -1,13 +1,20 @@
 package main
 
 import (
+	"context"
+	"fmt"
+	"os"
+	"os/signal"
 	"piper"
+	"syscall"
 	"time"
-
-	"github.com/streadway/amqp"
 )
 
 func main() {
+	ctx, cancel := context.WithCancel(context.Background())
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+
 	connect, err := piper.NewConnection(
 		"amqp://root:pass@localhost:5672",
 		[]time.Duration{
@@ -20,7 +27,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	err = connect.Connect()
+	err = connect.Connect(ctx)
 	if err != nil {
 		panic(err)
 	}
@@ -33,7 +40,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	go publish.Run()
+	go publish.Run(ctx)
 
 	reportPublisher, err := piper.NewPublisher(piper.PublisherConfig{
 		Exchange:     "test.report",
@@ -44,7 +51,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	go reportPublisher.Run()
+	go reportPublisher.Run(ctx)
 
 	consumer, err := piper.NewConsumer(piper.ConsumerConfig{
 		Exchange:     "test.exchange",
@@ -53,7 +60,7 @@ func main() {
 		Queue:        "test",
 		Routines:     40,
 	}, connect)
-	go consumer.Run()
+	go consumer.Run(ctx)
 
 	go func() {
 		for i := 0; i <= 20; i++ {
@@ -63,58 +70,21 @@ func main() {
 			}
 		}
 	}()
+	go func() {
+		<-sigs
+		cancel()
+	}()
 	for message := range consumer.Read() {
+		fmt.Println(message.Payload.(float64))
+		if reportPublisher.IsClose() {
+			continue
+		}
 		reportPublisher.Publish() <- piper.Message{
 			Payload: &piper.DoneReport{
 				Status: 1,
 			},
 			UID: message.UID,
 		}
-
 	}
-}
-
-func main2() {
-	connect, err := amqp.Dial("amqp://root:pass@localhost:5672")
-	if err != nil {
-		panic(err)
-	}
-	c, err := piper.NewReadQueue(connect, "test.exchange", "test", 40, "test")
-	if err != nil {
-		panic(err)
-	}
-
-	wq, err := piper.NewWriteQueue(connect, "test.exchange", "test")
-	if err != nil {
-		panic(err)
-	}
-	go wq.Run()
-
-	go func() {
-		for i := 0; i <= 20; i++ {
-			wq.Write() <- piper.Message{
-				Payload: i,
-				UID:     "uid",
-			}
-		}
-	}()
-
-	rq, err := c.WithReport("test.report", "test.report")
-	if err != nil {
-		panic(err)
-	}
-	go func() {
-		err := rq.Run()
-		if err != nil {
-			panic(err)
-		}
-	}()
-	for message := range rq.Read() {
-		rq.Report() <- piper.Report{
-			Done: &piper.DoneReport{
-				Status: 1,
-			},
-			UID: message.UID,
-		}
-	}
+	fmt.Println("Complete Program")
 }
