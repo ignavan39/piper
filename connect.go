@@ -3,10 +3,11 @@ package piper
 import (
 	"context"
 	"fmt"
-	"github.com/pkg/errors"
-	"github.com/streadway/amqp"
 	"sync"
 	"time"
+
+	"github.com/pkg/errors"
+	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 type Connection struct {
@@ -112,7 +113,7 @@ func (c *Connection) Connect(ctx context.Context) error {
 					fmt.Println("rabbitMQ connection unexpected closed")
 
 					c.mu.Lock()
-					var connErr error
+
 					for _, timeout := range c.backoffPolicy {
 						if connErr := c.connect(); connErr != nil {
 							fmt.Println("connection failed, trying to reconnect to rabbitMQ")
@@ -121,9 +122,7 @@ func (c *Connection) Connect(ctx context.Context) error {
 						}
 						break
 					}
-					if connErr != nil {
-						panic("connection failed")
-					}
+
 					c.mu.Unlock()
 				}
 			}
@@ -223,21 +222,16 @@ func (c *Connection) channelNotifyHandler(poolKey ChannelPoolItemKey) {
 
 	go func() {
 		fmt.Printf("starting channel watcher on channel: %s \n", poolKey.Name)
-		for {
-			select {
-			default:
-				_, ok := <-ch.NotifyClose(make(chan *amqp.Error))
-				if !ok {
-					if c.isClosed {
-						return
-					}
-					fmt.Println("rabbitMQ channel unexpected closed")
-					c.channelPoolMu.Lock()
-					delete(c.channelPool, poolKey)
-					c.channelPoolMu.Unlock()
-					return
-				}
+		_, ok := <-ch.NotifyClose(make(chan *amqp.Error))
+		if !ok {
+			if c.isClosed {
+				return
 			}
+			fmt.Println("rabbitMQ channel unexpected closed")
+			c.channelPoolMu.Lock()
+			delete(c.channelPool, poolKey)
+			c.channelPoolMu.Unlock()
+			return
 		}
 	}()
 }
