@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
-	"fmt"
+	amqp "github.com/rabbitmq/amqp091-go"
+	"log"
 	"os"
 	"os/signal"
 	"piper"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -31,27 +33,18 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	publish, err := piper.NewPublisher(piper.PublisherConfig{
+
+	publisher, err := piper.NewPublisher(piper.PublisherConfig{
 		Exchange:     "test.exchange",
 		ExchangeKind: "topic",
 		RoutingKey:   "test",
 	}, connect)
-	err = publish.Connect()
-	if err != nil {
-		panic(err)
-	}
-	go publish.Run(ctx)
 
-	reportPublisher, err := piper.NewPublisher(piper.PublisherConfig{
-		Exchange:     "test.report",
-		ExchangeKind: "topic",
-		RoutingKey:   "test.report",
-	}, connect)
-	err = reportPublisher.Connect()
+	err = publisher.Connect()
 	if err != nil {
 		panic(err)
 	}
-	go reportPublisher.Run(ctx)
+	go publisher.Run(ctx)
 
 	consumer, err := piper.NewConsumer(piper.ConsumerConfig{
 		Exchange:     "test.exchange",
@@ -60,31 +53,38 @@ func main() {
 		Queue:        "test",
 		Routines:     40,
 	}, connect)
-	go consumer.Run(ctx)
 
-	go func() {
-		for i := 0; i <= 20; i++ {
-			publish.Publish() <- piper.Message{
-				Payload: i,
-				UID:     "uid",
-			}
-		}
-	}()
-	go func() {
-		<-sigs
-		cancel()
-	}()
-	for message := range consumer.Read() {
-		fmt.Println(message.Payload.(float64))
-		if reportPublisher.IsClose() {
-			continue
-		}
-		reportPublisher.Publish() <- piper.Message{
-			Payload: &piper.DoneReport{
-				Status: 1,
-			},
-			UID: message.UID,
+	var wg sync.WaitGroup
+
+	go func(ctx context.Context) {
+		wg.Add(1)
+		defer wg.Done()
+
+		go consumer.Start(ctx, processing())
+		<-consumer.WaitClose()
+
+		log.Println("Consumer closed")
+	}(ctx)
+
+	for i := 0; i <= 20; i++ {
+		publisher.Publish(ctx) <- piper.Message{
+			Payload: i,
+			UID:     "uid",
 		}
 	}
-	fmt.Println("Complete Program")
+
+	<-sigs
+
+	log.Println(ctx, "[os.SIGNAL] start shutdown")
+	cancel()
+	wg.Wait()
+
+	log.Println("[os.SIGNAL] success shutdown")
+}
+
+func processing() func(delivery amqp.Delivery, index int) error {
+	return func(delivery amqp.Delivery, index int) error {
+		log.Println(delivery, index)
+		return nil
+	}
 }

@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"github.com/pkg/errors"
-	"github.com/streadway/amqp"
+	amqp "github.com/rabbitmq/amqp091-go"
+	"log"
+	"os"
 	"sync"
 	"time"
 )
@@ -16,13 +18,19 @@ type Connection struct {
 	serviceChannel *amqp.Channel
 	mu             sync.RWMutex
 	channelPool    map[ChannelPoolItemKey]*amqp.Channel
+	consumers      map[ChannelPoolItemKey]*Consumer
+	publishers     map[ChannelPoolItemKey]*Publisher
 	channelPoolMu  sync.RWMutex
+	consumersMu    sync.RWMutex
+	publishersMu   sync.RWMutex
 	isClosed       bool
 }
 
 func NewConnection(dsn string, backoffPolicy []time.Duration) (*Connection, error) {
 	conn := &Connection{
 		dsn:           dsn,
+		consumers:     make(map[ChannelPoolItemKey]*Consumer),
+		publishers:    make(map[ChannelPoolItemKey]*Publisher),
 		backoffPolicy: backoffPolicy,
 	}
 	return conn, nil
@@ -49,11 +57,16 @@ func (c *Connection) Channel() (*amqp.Channel, error) {
 	return channel, nil
 }
 
-func (c *Connection) Close(_ context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.isClosed = true
+func (c *Connection) Close(ctx context.Context) error {
+	c.SetClosed(true)
+	for _, consumer := range c.consumers {
+		consumer.Stop(ctx)
+		<-consumer.Done()
+	}
+	for _, publisher := range c.publishers {
+		publisher.Stop(ctx)
+		<-publisher.Done()
+	}
 	for _, ch := range c.channelPool {
 		err := ch.Close()
 		if err != nil {
@@ -66,6 +79,12 @@ func (c *Connection) Close(_ context.Context) error {
 	}
 
 	return nil
+}
+
+func (c *Connection) SetClosed(value bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.isClosed = value
 }
 
 func (c *Connection) IsClosed() bool {
@@ -90,39 +109,40 @@ func (c *Connection) connect() error {
 }
 
 func (c *Connection) Connect(ctx context.Context) error {
-	if !c.isClosed {
+	if !c.IsClosed() {
 		if err := c.connect(); err != nil {
 			return errors.Wrap(err, "connect")
 		}
 	}
-	fmt.Println("starting connection watcher")
+	log.Printf("[AMQP CONNECT] starting connection watcher")
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
 				_ = c.Close(ctx)
-				fmt.Println("connection closed")
+				log.Printf("[AMQP CONNECT] connection closed")
 				return
-			case res, ok := <-c.conn.NotifyClose(make(chan *amqp.Error)):
-				fmt.Println(res, ok)
+			case _, ok := <-c.conn.NotifyClose(make(chan *amqp.Error)):
 				if !ok {
-					if c.isClosed {
+					if c.IsClosed() {
 						return
 					}
-					fmt.Println("rabbitMQ connection unexpected closed")
-
+					log.Printf("[AMQP CONNECT] connection unexpected closed")
 					c.mu.Lock()
 					var connErr error
 					for _, timeout := range c.backoffPolicy {
 						if connErr := c.connect(); connErr != nil {
-							fmt.Println("connection failed, trying to reconnect to rabbitMQ")
+							log.Printf("[AMQP CONNECT] connection failed, trying to reconnect to rabbitMQ")
+							fmt.Println("connection failed, trying to reconnect to rabbitMQ", timeout)
 							time.Sleep(timeout)
 							continue
 						}
+						log.Printf("[AMQP CONNECT] reconnect to rabbitMQ %s", timeout)
 						break
 					}
 					if connErr != nil {
-						panic("connection failed")
+						log.Printf("[AMQP CONNECT] error reconnect: %s", connErr)
+						os.Exit(1)
 					}
 					c.mu.Unlock()
 				}
@@ -160,49 +180,68 @@ func (c *Connection) Qos(routines, prefetch int, global bool) error {
 	return c.serviceChannel.Qos(routines, prefetch, global)
 }
 
-func (c *Connection) Consume(
-	name string,
-	queue string,
-	exchange string,
-	routingKey string,
-	autoAck,
-	exclusive,
-	noLocal,
-	noWait bool,
-	args amqp.Table) (<-chan amqp.Delivery, error) {
+func (c *Connection) addConsumerInPoll(poolKey ChannelPoolItemKey, consumer *Consumer) {
+	c.consumersMu.Lock()
+	defer c.consumersMu.Unlock()
+	_, ok := c.consumers[poolKey]
+	if !ok {
+		c.consumers[poolKey] = consumer
+	}
+}
+
+func (c *Connection) addPublisherInPoll(poolKey ChannelPoolItemKey, publisher *Publisher) {
+	c.publishersMu.Lock()
+	defer c.publishersMu.Unlock()
+	_, ok := c.publishers[poolKey]
+	if !ok {
+		c.publishers[poolKey] = publisher
+	}
+}
+
+func (c *Connection) AddConsumer(consumer *Consumer) (<-chan amqp.Delivery, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-
-	ch, err := c.GetChannelFromPool(name, exchange, routingKey, queue)
+	poolKey := ChannelPoolItemKey{
+		Name:       consumer.name,
+		Type:       "consumer",
+		Exchange:   consumer.config.Exchange,
+		RoutingKey: consumer.config.RoutingKey,
+		Queue:      consumer.config.Queue,
+	}
+	ch, err := c.GetChannelFromPool(poolKey)
 	if err != nil {
 		return nil, errors.Wrap(err, "get channel from pool")
 	}
-
-	return ch.Consume(queue, name, autoAck, exclusive, noLocal, noWait, args)
+	if err := ch.Qos(consumer.config.Routines, 0, false); err != nil {
+		return nil, err
+	}
+	c.addConsumerInPoll(poolKey, consumer)
+	return ch.Consume(consumer.config.Queue, consumer.name, false, false, false, false, nil)
 }
 
-func (c *Connection) Publish(name, exchange, routingKey string, mandatory, immediate bool, msg amqp.Publishing) error {
+func (c *Connection) Publish(publisher *Publisher, msg amqp.Publishing) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-
-	ch, err := c.GetChannelFromPool(name, exchange, routingKey, "")
+	poolKey := ChannelPoolItemKey{
+		Name:       publisher.name,
+		Type:       "publisher",
+		Exchange:   publisher.config.Exchange,
+		RoutingKey: publisher.config.RoutingKey,
+		Queue:      "",
+	}
+	ch, err := c.GetChannelFromPool(poolKey)
 	if err != nil {
 		return errors.Wrap(err, "get channel from pool")
 	}
-
-	return ch.Publish(exchange, routingKey, mandatory, immediate, msg)
+	c.addPublisherInPoll(poolKey, publisher)
+	return ch.Publish(publisher.config.Exchange, publisher.config.RoutingKey, false, false, msg)
 }
 
-func (c *Connection) GetChannelFromPool(name, exchange, routingKey, queue string) (*amqp.Channel, error) {
+func (c *Connection) GetChannelFromPool(poolKey ChannelPoolItemKey) (*amqp.Channel, error) {
 	c.channelPoolMu.Lock()
 	defer c.channelPoolMu.Unlock()
 	var err error
-	poolKey := ChannelPoolItemKey{
-		Name:       name,
-		Exchange:   exchange,
-		RoutingKey: routingKey,
-		Queue:      queue,
-	}
+
 	ch, ok := c.channelPool[poolKey]
 	if !ok {
 		if c.conn == nil {
@@ -235,6 +274,14 @@ func (c *Connection) channelNotifyHandler(poolKey ChannelPoolItemKey) {
 					c.channelPoolMu.Lock()
 					delete(c.channelPool, poolKey)
 					c.channelPoolMu.Unlock()
+
+					c.consumersMu.Lock()
+					delete(c.consumers, poolKey)
+					c.consumersMu.Unlock()
+
+					c.publishersMu.Lock()
+					delete(c.publishers, poolKey)
+					c.publishersMu.Unlock()
 					return
 				}
 			}

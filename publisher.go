@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"github.com/streadway/amqp"
+	amqp "github.com/rabbitmq/amqp091-go"
+	"log"
 	"sync"
 	"time"
 )
@@ -18,8 +18,9 @@ type Publisher struct {
 	name           string
 	muConn         sync.RWMutex
 	muClose        sync.RWMutex
-	messages       chan Message
+	messages       chan any
 	reportMessages chan Report
+	done           chan bool
 }
 
 func NewPublisher(config PublisherConfig, ch *Connection) (*Publisher, error) {
@@ -28,10 +29,11 @@ func NewPublisher(config PublisherConfig, ch *Connection) (*Publisher, error) {
 	}
 	publisher := &Publisher{
 		config:         config,
-		messages:       make(chan Message),
+		messages:       make(chan any),
 		reportMessages: make(chan Report),
 		conn:           ch,
 		name:           config.Exchange + "_" + config.RoutingKey,
+		done:           make(chan bool),
 	}
 
 	return publisher, nil
@@ -42,19 +44,17 @@ func (p *Publisher) Connect() error {
 	if p.isConnected {
 		return nil
 	}
-
 	if err := p.conn.ExchangeDeclare(
 		p.config.Exchange,
 		p.config.ExchangeKind,
-		false,
+		true,
 		false,
 		false,
 		false,
 		nil); err != nil {
-		return fmt.Errorf("[Pq][%s-%s][connect][declare exchange]\n", p.config.Exchange, p.config.RoutingKey, err)
+		return err
 	}
 	p.isConnected = true
-	fmt.Println("publish is connected")
 	return nil
 }
 func (p *Publisher) IsClose() bool {
@@ -62,20 +62,33 @@ func (p *Publisher) IsClose() bool {
 	defer p.muClose.RUnlock()
 	return p.isClose
 }
-func (p *Publisher) Publish() chan Message {
+func (p *Publisher) Publish(ctx context.Context) chan any {
 	p.muConn.RLock()
 	defer p.muConn.RUnlock()
 	if !p.isConnected {
 		for {
 			if err := p.Connect(); err != nil {
-				fmt.Printf("[Pq][%s-%s][Reconnect][declare exchange]\n", p.config.Exchange, p.config.RoutingKey)
+				log.Printf("[AMQP PUBLISHER] error declare exchange(%s) %s", p.config.Exchange, p.config.RoutingKey)
 				time.Sleep(10 * time.Second)
 				continue
 			}
+			log.Printf("[AMQP PUBLISHER] is connected (%s) %s", p.config.Exchange, p.config.RoutingKey)
 			break
 		}
 	}
 	return p.messages
+}
+func (p *Publisher) Done() chan bool {
+	return p.done
+}
+func (p *Publisher) Stop(ctx context.Context) error {
+	log.Printf("[AMQP PUBLISHER] STOP (%s) %s", p.config.Exchange, p.config.RoutingKey)
+	close(p.reportMessages)
+	close(p.messages)
+	p.muClose.Lock()
+	p.isClose = true
+	p.muClose.Unlock()
+	return nil
 }
 
 func (p *Publisher) Run(ctx context.Context) {
@@ -86,17 +99,14 @@ func (p *Publisher) Run(ctx context.Context) {
 		defer wg.Done()
 		for {
 			select {
-			case <-ctx.Done():
-				fmt.Printf("[Pq][%s-%s][Run][context closed]\n", p.config.Exchange, p.config.RoutingKey)
-				close(p.reportMessages)
-				close(p.messages)
-				p.muClose.Lock()
-				p.isClose = true
-				p.muClose.Unlock()
-				return
 			case payload, ok := <-p.messages:
 				if !ok {
-					fmt.Printf("[Pq][%s-%s][Run][channel closed]\n", p.config.Exchange, p.config.RoutingKey)
+					if p.conn.IsClosed() {
+						log.Printf("[AMQP PUBLISHER] channel is closed (%s) %s", p.config.Exchange, p.config.RoutingKey)
+						p.muClose.Lock()
+						p.isClose = true
+						p.muClose.Unlock()
+					}
 					return
 				}
 				if !p.isConnected {
@@ -104,28 +114,23 @@ func (p *Publisher) Run(ctx context.Context) {
 				}
 				buffer, err := json.Marshal(payload)
 				if err != nil {
-					fmt.Printf("[Pq][%s-%s] - failed marshal: %s", p.config.Exchange, p.config.RoutingKey, err)
+					log.Printf("[AMQP PUBLISHER] (%s) %s failed marshal: (%s) ", p.config.Exchange, p.config.RoutingKey, err)
 					continue
 				}
-				err = p.conn.Publish(
-					p.name,
-					p.config.Exchange,
-					p.config.RoutingKey,
-					false,
-					false,
-					amqp.Publishing{
-						Body:        buffer,
-						ContentType: "application/json",
-					})
+				err = p.conn.Publish(p, amqp.Publishing{
+					Body:        buffer,
+					ContentType: "application/json",
+				})
 				if err != nil {
 					p.muConn.Lock()
 					p.isConnected = false
 					p.muConn.Unlock()
-					fmt.Printf("[Pq][%s-%s][Publish][Error]: %s", p.config.Exchange, p.config.RoutingKey, err)
+					log.Printf("[AMQP PUBLISHER] error publish: (%s) %s: %s", p.config.Exchange, p.config.RoutingKey, err)
 				}
 			}
 		}
 	}()
-
 	wg.Wait()
+	p.Done() <- true
+	log.Printf("[AMQP PUBLISHER] DONE (%s)", p.name)
 }

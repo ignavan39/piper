@@ -1,7 +1,7 @@
 package piper
 
 import (
-	"github.com/streadway/amqp"
+	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 type Message struct {
@@ -44,6 +44,7 @@ type ResultDelivery struct {
 
 type ChannelPoolItemKey struct {
 	Name       string
+	Type       string
 	Queue      string
 	Consumer   string
 	Exchange   string
