@@ -2,7 +2,6 @@ package piper
 
 import (
 	"context"
-	"fmt"
 	"github.com/pkg/errors"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"log"
@@ -133,7 +132,7 @@ func (c *Connection) Connect(ctx context.Context) error {
 					for _, timeout := range c.backoffPolicy {
 						if connErr := c.connect(); connErr != nil {
 							log.Printf("[AMQP CONNECT] connection failed, trying to reconnect to rabbitMQ")
-							fmt.Println("connection failed, trying to reconnect to rabbitMQ", timeout)
+							log.Println("connection failed, trying to reconnect to rabbitMQ", timeout)
 							time.Sleep(timeout)
 							continue
 						}
@@ -261,7 +260,7 @@ func (c *Connection) channelNotifyHandler(poolKey ChannelPoolItemKey) {
 	ch := c.channelPool[poolKey]
 
 	go func() {
-		fmt.Printf("starting channel watcher on channel: %s \n", poolKey.Name)
+		log.Printf("starting channel watcher on channel: %s \n", poolKey.Name)
 		for {
 			select {
 			default:
@@ -270,7 +269,7 @@ func (c *Connection) channelNotifyHandler(poolKey ChannelPoolItemKey) {
 					if c.isClosed {
 						return
 					}
-					fmt.Println("rabbitMQ channel unexpected closed")
+					log.Println("rabbitMQ channel unexpected closed")
 					c.channelPoolMu.Lock()
 					delete(c.channelPool, poolKey)
 					c.channelPoolMu.Unlock()
