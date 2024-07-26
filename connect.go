@@ -2,6 +2,7 @@ package piper
 
 import (
 	"context"
+	"fmt"
 	"github.com/pkg/errors"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"log"
@@ -97,10 +98,7 @@ func (c *Connection) connect() error {
 	if c.conn, err = amqp.Dial(c.dsn); err != nil {
 		return errors.Wrap(err, "connect to rabbitMQ")
 	}
-
-	if c.serviceChannel, err = c.conn.Channel(); err != nil {
-		return errors.Wrap(err, "create service rabbitMQ channel")
-	}
+	c.serviceChannel = c.getServiceChannel()
 
 	c.channelPool = make(map[ChannelPoolItemKey]*amqp.Channel)
 
@@ -124,6 +122,7 @@ func (c *Connection) Connect(ctx context.Context) error {
 			case _, ok := <-c.conn.NotifyClose(make(chan *amqp.Error)):
 				if !ok {
 					if c.IsClosed() {
+						log.Printf("[AMQP CONNECT] connection is closed")
 						return
 					}
 					log.Printf("[AMQP CONNECT] connection unexpected closed")
@@ -131,8 +130,7 @@ func (c *Connection) Connect(ctx context.Context) error {
 					var connErr error
 					for _, timeout := range c.backoffPolicy {
 						if connErr := c.connect(); connErr != nil {
-							log.Printf("[AMQP CONNECT] connection failed, trying to reconnect to rabbitMQ")
-							log.Println("connection failed, trying to reconnect to rabbitMQ", timeout)
+							log.Printf("[ERROR] [AMQP CONNECT] connection failed, trying to reconnect to rabbitMQ")
 							time.Sleep(timeout)
 							continue
 						}
@@ -140,7 +138,7 @@ func (c *Connection) Connect(ctx context.Context) error {
 						break
 					}
 					if connErr != nil {
-						log.Printf("[AMQP CONNECT] error reconnect: %s", connErr)
+						log.Printf("[ERROR] [AMQP CONNECT] error reconnect: %s", connErr)
 						os.Exit(1)
 					}
 					c.mu.Unlock()
@@ -155,28 +153,49 @@ func (c *Connection) ExchangeDeclare(name, kind string, durable, autoDelete, int
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	return c.serviceChannel.ExchangeDeclare(name, kind, durable, autoDelete, internal, noWait, args)
+	return c.getServiceChannel().ExchangeDeclare(name, kind, durable, autoDelete, internal, noWait, args)
 }
 
 func (c *Connection) QueueDeclare(name string, durable, autoDelete, exclusive, noWait bool, args amqp.Table) (amqp.Queue, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	return c.serviceChannel.QueueDeclare(name, durable, autoDelete, exclusive, noWait, args)
+	return c.getServiceChannel().QueueDeclare(name, durable, autoDelete, exclusive, noWait, args)
+}
+
+func (c *Connection) getServiceChannel() (ch *amqp.Channel) {
+	if c.serviceChannel == nil {
+		c.serviceChannel = c.connectChannel()
+		return c.serviceChannel
+	}
+	if c.serviceChannel.IsClosed() {
+		c.serviceChannel = c.connectChannel()
+		return c.serviceChannel
+	}
+	return c.serviceChannel
+}
+
+func (c *Connection) connectChannel() (ch *amqp.Channel) {
+	channel, err := c.conn.Channel()
+	if err != nil {
+		log.Printf("[ERROR] [AMQP CONNECT] error getServiceChannel: %s", err)
+		os.Exit(1)
+	}
+	return channel
 }
 
 func (c *Connection) QueueBind(name, key, exchange string, noWait bool, args amqp.Table) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	return c.serviceChannel.QueueBind(name, key, exchange, noWait, args)
+	return c.getServiceChannel().QueueBind(name, key, exchange, noWait, args)
 }
 
 func (c *Connection) Qos(routines, prefetch int, global bool) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	return c.serviceChannel.Qos(routines, prefetch, global)
+	return c.getServiceChannel().Qos(routines, prefetch, global)
 }
 
 func (c *Connection) addConsumerInPoll(poolKey ChannelPoolItemKey, consumer *Consumer) {
@@ -208,12 +227,48 @@ func (c *Connection) AddConsumer(consumer *Consumer) (<-chan amqp.Delivery, erro
 		Queue:      consumer.config.Queue,
 	}
 	ch, err := c.GetChannelFromPool(poolKey)
+	if err := ch.ExchangeDeclare(
+		consumer.config.Exchange,
+		consumer.config.ExchangeKind,
+		true,
+		false,
+		false,
+		false,
+		nil); err != nil {
+		return nil, fmt.Errorf("[CONSUMER][declareExchange][%s-%s]: %s", consumer.config.Exchange, consumer.config.ExchangeKind, err)
+	}
+
+	if _, err := ch.QueueDeclare(
+		consumer.config.Queue,
+		true,
+		false,
+		false,
+		false,
+		nil,
+	); err != nil {
+		return nil, fmt.Errorf("[CONSUMER][createChannel][%s]: %s", consumer.config.Queue, err)
+	}
+
+	if err := ch.QueueBind(
+		consumer.config.Queue,
+		consumer.config.RoutingKey,
+		consumer.config.Exchange,
+		false,
+		nil,
+	); err != nil {
+		return nil, fmt.Errorf("[CONSUMER][queueBind][%s]: %s", consumer.config.Queue, err)
+	}
+
 	if err != nil {
+		log.Printf("[AMQP CONNECT](%s) CONSUMER GetChannelFromPool error", consumer.config.RoutingKey)
 		return nil, errors.Wrap(err, "get channel from pool")
 	}
 	if err := ch.Qos(consumer.config.Routines, 0, false); err != nil {
+		log.Printf("[AMQP CONNECT](%s) CONSUMER Qos error", consumer.config.RoutingKey)
 		return nil, err
 	}
+	log.Printf("[AMQP CONNECT](%s) CONSUMER add channel to pool", consumer.config.RoutingKey)
+
 	c.addConsumerInPoll(poolKey, consumer)
 	return ch.Consume(consumer.config.Queue, consumer.name, false, false, false, false, nil)
 }
@@ -230,6 +285,7 @@ func (c *Connection) Publish(publisher *Publisher, msg amqp.Publishing) error {
 	}
 	ch, err := c.GetChannelFromPool(poolKey)
 	if err != nil {
+		log.Printf("[AMQP CONNECT](%s) PUBLISHER GetChannelFromPool error", publisher.config.RoutingKey)
 		return errors.Wrap(err, "get channel from pool")
 	}
 	c.addPublisherInPoll(poolKey, publisher)
@@ -260,16 +316,17 @@ func (c *Connection) channelNotifyHandler(poolKey ChannelPoolItemKey) {
 	ch := c.channelPool[poolKey]
 
 	go func() {
-		log.Printf("starting channel watcher on channel: %s \n", poolKey.Name)
+		log.Printf("starting channel watcher on channel: %s", poolKey.Name)
 		for {
 			select {
 			default:
 				_, ok := <-ch.NotifyClose(make(chan *amqp.Error))
 				if !ok {
 					if c.isClosed {
+						log.Printf("rabbitMQ channel is closed exit")
 						return
 					}
-					log.Println("rabbitMQ channel unexpected closed")
+					log.Printf("rrabbitMQ channel unexpected closed")
 					c.channelPoolMu.Lock()
 					delete(c.channelPool, poolKey)
 					c.channelPoolMu.Unlock()

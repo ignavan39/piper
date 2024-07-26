@@ -68,7 +68,7 @@ func (p *Publisher) Publish(ctx context.Context) chan any {
 	if !p.isConnected {
 		for {
 			if err := p.Connect(); err != nil {
-				log.Printf("[AMQP PUBLISHER] error declare exchange(%s) %s", p.config.Exchange, p.config.RoutingKey)
+				log.Printf("[ERROR] [AMQP PUBLISHER] error declare exchange(%s) %s", p.config.Exchange, p.config.RoutingKey)
 				time.Sleep(10 * time.Second)
 				continue
 			}
@@ -91,7 +91,7 @@ func (p *Publisher) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (p *Publisher) Run(ctx context.Context) {
+func (p *Publisher) Start(ctx context.Context) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
@@ -114,7 +114,7 @@ func (p *Publisher) Run(ctx context.Context) {
 				}
 				buffer, err := json.Marshal(payload)
 				if err != nil {
-					log.Printf("[AMQP PUBLISHER] (%s) %s failed marshal: (%s) ", p.config.Exchange, p.config.RoutingKey, err)
+					log.Printf("[ERROR] [AMQP PUBLISHER] (%s) %s failed marshal: (%s) ", p.config.Exchange, p.config.RoutingKey, err)
 					continue
 				}
 				err = p.conn.Publish(p, amqp.Publishing{
@@ -125,7 +125,7 @@ func (p *Publisher) Run(ctx context.Context) {
 					p.muConn.Lock()
 					p.isConnected = false
 					p.muConn.Unlock()
-					log.Printf("[AMQP PUBLISHER] error publish: (%s) %s: %s", p.config.Exchange, p.config.RoutingKey, err)
+					log.Printf("[ERROR] [AMQP PUBLISHER] error publish: (%s) %s: %s", p.config.Exchange, p.config.RoutingKey, err)
 				}
 			}
 		}

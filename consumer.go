@@ -14,7 +14,7 @@ type Consumer struct {
 	conn      *Connection
 	config    ConsumerConfig
 	name      string
-	read      chan amqp.Delivery
+	read      chan *amqp.Delivery
 	done      chan bool
 	waitClose chan bool
 }
@@ -25,7 +25,7 @@ func NewConsumer(config ConsumerConfig, ch *Connection) (*Consumer, error) {
 	}
 	c := &Consumer{
 		config:    config,
-		read:      make(chan amqp.Delivery),
+		read:      make(chan *amqp.Delivery),
 		name:      config.Exchange + "_" + config.RoutingKey + "_" + config.Queue,
 		conn:      ch,
 		done:      make(chan bool),
@@ -41,15 +41,15 @@ func (c *Consumer) WaitClose() chan bool {
 	return c.waitClose
 }
 
-func (c *Consumer) Run(ctx context.Context) {
+func (c *Consumer) run(ctx context.Context) {
 	err := c.consume(ctx)
 	if err != nil {
-		log.Printf("[AMQP CONSUME][Consumer][%s] error run: %s", c.config.Queue, err)
+		log.Printf("[ERROR] [AMQP CONSUME][Consumer][%s] error run: %s", c.config.Queue, err)
 	}
 }
 
-func (c *Consumer) Start(ctx context.Context, callback func(delivery amqp.Delivery, index int) error) {
-	go c.Run(ctx)
+func (c *Consumer) Start(ctx context.Context, callback func(delivery *amqp.Delivery, index int) error) {
+	go c.run(ctx)
 	var wg sync.WaitGroup
 	wg.Add(c.config.Routines)
 	for i := 0; i < c.config.Routines; i++ {
@@ -63,14 +63,14 @@ func (c *Consumer) Start(ctx context.Context, callback func(delivery amqp.Delive
 					}
 					err := callback(delivery, index)
 					if err != nil {
-						log.Printf("[AMQP CONSUME] failed process receive message (%s)", err)
+						log.Printf("[ERROR] [AMQP CONSUME] failed process receive message (%s)", err)
 						if err := delivery.Reject(false); err != nil {
-							log.Printf("[AMQP CONSUME] failed nack message (%s)", err)
+							log.Printf("[ERROR] [AMQP CONSUME] failed nack message (%s)", err)
 						}
 						continue
 					}
 					if err := delivery.Ack(false); err != nil {
-						log.Printf("[AMQP CONSUME] failed to ack message (%s)", err)
+						log.Printf("[ERROR] [AMQP CONSUME] failed to ack message (%s)", err)
 						continue
 					}
 				}
@@ -83,46 +83,14 @@ func (c *Consumer) Start(ctx context.Context, callback func(delivery amqp.Delive
 	c.WaitClose() <- true
 }
 
-func (c *Consumer) Read() <-chan amqp.Delivery {
+func (c *Consumer) Read() <-chan *amqp.Delivery {
 	return c.read
 }
 
 func (c *Consumer) Connect() (<-chan amqp.Delivery, error) {
-	if err := c.conn.ExchangeDeclare(
-		c.config.Exchange,
-		c.config.ExchangeKind,
-		true,
-		false,
-		false,
-		false,
-		nil); err != nil {
-		return nil, fmt.Errorf("[Rq][declareExchange][%s-%s]: %s", c.config.Exchange, c.config.ExchangeKind, err)
-	}
-
-	if _, err := c.conn.QueueDeclare(
-		c.config.Queue,
-		true,
-		false,
-		false,
-		false,
-		nil,
-	); err != nil {
-		return nil, fmt.Errorf("[Rq][createChannel][%s]: %s", c.config.Queue, err)
-	}
-
-	if err := c.conn.QueueBind(
-		c.config.Queue,
-		c.config.RoutingKey,
-		c.config.Exchange,
-		false,
-		nil,
-	); err != nil {
-		return nil, fmt.Errorf("[Rq][queueBind][%s]: %s", c.config.Queue, err)
-	}
-
 	deliveries, err := c.conn.AddConsumer(c)
 	if err != nil {
-		return nil, fmt.Errorf("[Rq][%s][Run]: %s", c.config.Queue, err)
+		return nil, fmt.Errorf("[Rq][%s][run]: %s", c.config.Queue, err)
 	}
 	return deliveries, nil
 }
@@ -139,7 +107,7 @@ func (c *Consumer) consume(ctx context.Context) error {
 	var err error
 	for {
 		if deliveries, err = c.Connect(); err != nil {
-			log.Printf("[AMQP CONSUME] error connect (%s): %s", c.config.Queue, err)
+			log.Printf("[ERROR] [AMQP CONSUME] error connect (%s): %s", c.config.Queue, err)
 			time.Sleep(10 * time.Second)
 			continue
 		}
@@ -158,6 +126,7 @@ func (c *Consumer) consume(ctx context.Context) error {
 			case result, ok := <-pool.Results():
 				if !ok {
 					if c.conn.IsClosed() {
+						log.Printf("[AMQP CONSUME] connection is close exit (%s)", c.config.Queue)
 						return
 					}
 					log.Printf("[AMQP CONSUME] try to reconnect consumer (%s)", c.config.Queue)

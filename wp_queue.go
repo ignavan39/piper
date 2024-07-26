@@ -3,6 +3,7 @@ package piper
 import (
 	"context"
 	amqp "github.com/rabbitmq/amqp091-go"
+	"log"
 	"sync"
 )
 
@@ -17,8 +18,9 @@ func NewWorkerPool(count int, queue string, deliveries <-chan amqp.Delivery) *Qu
 
 func (wp QueueWorkerPool) RunWorkerPool(ctx context.Context) {
 	var wg sync.WaitGroup
+
+	wg.Add(wp.workersCount)
 	for i := 0; i < wp.workersCount; i++ {
-		wg.Add(1)
 		go wp.workerProcessing(ctx, i, &wg)
 	}
 	wg.Wait()
@@ -35,11 +37,12 @@ func (wp QueueWorkerPool) workerProcessing(ctx context.Context, numWorker int, w
 		select {
 		case delivery, ok := <-wp.deliveries:
 			if !ok {
+				log.Printf("[AMQP WORKER POOL] workerProcessing is close exit (%s)", numWorker)
 				return
 			}
 			wp.results <- ResultDelivery{
 				WorkerId: numWorker,
-				Delivery: delivery,
+				Delivery: &delivery,
 			}
 		}
 	}

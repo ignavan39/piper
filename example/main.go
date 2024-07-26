@@ -44,7 +44,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	go publisher.Run(ctx)
+	go publisher.Start(ctx)
 
 	consumer, err := piper.NewConsumer(piper.ConsumerConfig{
 		Exchange:     "test.exchange",
@@ -82,8 +82,8 @@ func main() {
 	log.Println("[os.SIGNAL] success shutdown")
 }
 
-func processing() func(delivery amqp.Delivery, index int) error {
-	return func(delivery amqp.Delivery, index int) error {
+func processing() func(delivery *amqp.Delivery, index int) error {
+	return func(delivery *amqp.Delivery, index int) error {
 		log.Println(delivery, index)
 		return nil
 	}

@@ -39,7 +39,7 @@ type QueueWorkerPool struct {
 
 type ResultDelivery struct {
 	WorkerId int
-	Delivery amqp.Delivery
+	Delivery *amqp.Delivery
 }
 
 type ChannelPoolItemKey struct {
